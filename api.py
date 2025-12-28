@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from typing import Optional
 
 import time
 from pathlib import Path
@@ -30,6 +31,15 @@ MODELS = [
     "rt-detrv4x-pretrained",
 ]
 
+# Hardcoded 5 class names (sizin dataset'inizin sınıfları)
+CLASS_NAMES = [
+    "dentigeroz kist",
+    "keratokist",
+    "radikuler kist",
+    "ameloblastoma",
+    "odontoma",
+]
+
 app = FastAPI(title="predictApi", version="1.0.0")
 
 origins = ["http://localhost:5173"]
@@ -49,8 +59,214 @@ def root():
 
 
 # ============================================================================
-# YOLO SEGMENTATION FUNCTIONS (Original)
+# UPLOAD HELPER FUNCTIONS
 # ============================================================================
+
+
+def parse_yolo_gt_from_string(gt_text, img_shape, class_names):
+    """
+    YOLO format string'i parse et (memory'den)
+
+    Format: class_id x1 y1 x2 y2 ... (normalized polygon coordinates)
+    """
+    h, w = img_shape[:2]
+    gt_objects = []
+
+    for line in gt_text.strip().split("\n"):
+        if not line.strip():
+            continue
+
+        parts = line.strip().split()
+        cls = int(parts[0])
+        coords = np.array(parts[1:], dtype=np.float32).reshape(-1, 2)
+
+        poly = np.zeros_like(coords)
+        poly[:, 0] = coords[:, 0] * w
+        poly[:, 1] = coords[:, 1] * h
+        poly = poly.astype(np.int32)
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(mask, [poly], 1)
+
+        gt_objects.append(
+            {
+                "class": cls,
+                "class_name": (
+                    class_names[cls] if cls < len(class_names) else f"Class {cls}"
+                ),
+                "poly": poly,
+                "mask": mask,
+            }
+        )
+
+    return gt_objects
+
+
+def parse_rtdetr_gt_from_json(gt_json, class_names):
+    """
+    Simplified COCO JSON'ı parse et
+
+    Format:
+    {
+        "annotations": [
+            {"class_id": 0, "bbox": [x1, y1, x2, y2]},
+            {"class_id": 1, "bbox": [x1, y1, x2, y2]}
+        ]
+    }
+    """
+    gt_bboxes = []
+
+    annotations = gt_json.get("annotations", [])
+
+    for ann in annotations:
+        class_id = ann["class_id"]
+        bbox = ann["bbox"]  # [x1, y1, x2, y2]
+
+        gt_bboxes.append(
+            {
+                "bbox": bbox,
+                "class": class_id,
+                "class_name": (
+                    class_names[class_id]
+                    if class_id < len(class_names)
+                    else f"Class {class_id}"
+                ),
+            }
+        )
+
+    return gt_bboxes
+
+
+def visualize_gt_pred_overlay_from_objects(img, gt_objs, pred_objs, class_names_dict):
+    """YOLO: GT ve Pred objects'ten overlay oluştur"""
+    h, w = img.shape[:2]
+
+    # GT IMAGE
+    gt_img = img.copy()
+    for g in gt_objs:
+        cv2.fillPoly(gt_img, [g["poly"]], (0, 255, 0))
+        x, y = g["poly"][0]
+        cv2.putText(
+            gt_img,
+            g["class_name"],
+            (x, y - 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 255, 0),
+            2,
+        )
+
+    # PRED IMAGE
+    pred_img = img.copy()
+    for p in pred_objs:
+        cv2.fillPoly(pred_img, [p["poly"]], (0, 0, 255))
+        x, y = p["poly"][0]
+        label = f"{class_names_dict[p['class']]} {p['conf']:.2f}"
+        cv2.putText(
+            pred_img, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2
+        )
+
+    # OVERLAY
+    overlay = img.copy()
+    gt_mask = np.zeros((h, w), dtype=np.uint8)
+    pred_mask = np.zeros((h, w), dtype=np.uint8)
+
+    for g in gt_objs:
+        gt_mask |= g["mask"]
+    for p in pred_objs:
+        pred_mask |= p["mask"]
+
+    tp_mask = gt_mask & pred_mask
+    overlay[(gt_mask == 1) & (tp_mask == 0)] = [0, 255, 0]
+    overlay[(pred_mask == 1) & (tp_mask == 0)] = [0, 0, 255]
+    overlay[tp_mask == 1] = [255, 0, 0]
+
+    return gt_img, pred_img, overlay
+
+
+def visualize_pred_only(img, pred_objs, class_names_dict):
+    """YOLO: Sadece prediction göster (GT yok)"""
+    pred_img = img.copy()
+
+    for p in pred_objs:
+        cv2.fillPoly(pred_img, [p["poly"]], (0, 0, 255))
+        x, y = p["poly"][0]
+        label = f"{class_names_dict[p['class']]} {p['conf']:.2f}"
+        cv2.putText(
+            pred_img, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2
+        )
+
+    return pred_img
+
+
+def rtdetr_inference_image_from_array(model, img_array, cfg, device="cpu"):
+    """
+    RT-DETRv4 inference from numpy array (memory'den)
+
+    Args:
+        img_array: numpy array (BGR format from cv2)
+
+    Returns:
+        outputs, orig_img, orig_size
+    """
+    import torch
+
+    orig_img = img_array.copy()
+    orig_h, orig_w = orig_img.shape[:2]
+
+    # Resize size config'ten al
+    eval_size = cfg.yaml_cfg.get("eval_spatial_size", [960, 960])
+    if isinstance(eval_size, int):
+        eval_size = [eval_size, eval_size]
+    resize_h, resize_w = eval_size
+
+    # Preprocessing
+    img = cv2.resize(orig_img, (resize_w, resize_h))
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = img.astype(np.float32) / 255.0
+    img = np.transpose(img, (2, 0, 1))
+    img = torch.from_numpy(img).unsqueeze(0).to(device)
+
+    # Original size tensor
+    orig_size = torch.tensor([[orig_h, orig_w]], device=device)
+
+    # Inference
+    with torch.no_grad():
+        outputs = model(img, orig_size)
+
+    return outputs, orig_img, (orig_h, orig_w)
+
+
+def visualize_rtdetr_pred_only(img, detections, class_names, conf_threshold=0.5):
+    """RT-DETR: Sadece prediction göster (GT yok)"""
+    pred_img = img.copy()
+
+    for box, score, label_id in zip(
+        detections["boxes"], detections["scores"], detections["labels"]
+    ):
+        if score < conf_threshold:
+            continue
+
+        x1, y1, x2, y2 = box.astype(int)
+        cv2.rectangle(pred_img, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+        class_name = (
+            class_names[label_id]
+            if label_id < len(class_names)
+            else f"Class {label_id}"
+        )
+        label_text = f"{class_name}: {score:.2f}"
+        cv2.putText(
+            pred_img,
+            label_text,
+            (x1, y1 - 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 0, 255),
+            2,
+        )
+
+    return pred_img
 
 
 def load_gt_masks(label_path, img_shape):
@@ -735,3 +951,242 @@ def predict_test(
 
     else:
         return {"error": "unsupported model type"}
+
+
+# ============================================================================
+# UPLOAD ENDPOINT
+# ============================================================================
+
+
+@app.post("/predict/upload")
+async def predict_upload(
+    image: UploadFile = File(...),
+    model_name: str = Form(...),
+    conf_threshold: float = Form(0.5),
+    chart_conf_threshold: float = Form(0.001),
+    gt_file: Optional[UploadFile] = File(None),
+):
+    """
+    Upload endpoint - Image + optional GT file
+
+    YOLO: gt_file = .txt (YOLO polygon format)
+    RT-DETR: gt_file = .json (simplified COCO format)
+    """
+
+    if model_name not in MODELS:
+        return {"error": "model not found in models"}
+
+    # Image'i memory'de oku
+    image_bytes = await image.read()
+    nparr = np.frombuffer(image_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    if img is None:
+        return {"error": "Invalid image file"}
+
+    gt_error = None  # GT parse hatası varsa buraya kaydedilecek
+
+    # ========================================================================
+    # YOLO MODELS
+    # ========================================================================
+    if model_name.startswith("yolo"):
+        from ultralytics import YOLO
+
+        model = YOLO(MODELS_DIR / f"{model_name}.pt")
+
+        # Inference
+        start_time = time.time()
+        results = model.predict(
+            source=img, imgsz=1536, device="cpu", conf=chart_conf_threshold
+        )
+        inference_time = time.time() - start_time
+
+        result = results[0]
+
+        # GT varsa parse et
+        gt_objs = []
+        if gt_file is not None:
+            try:
+                gt_content = await gt_file.read()
+                gt_text = gt_content.decode("utf-8")
+                gt_objs = parse_yolo_gt_from_string(gt_text, img.shape, CLASS_NAMES)
+            except Exception as e:
+                gt_error = f"GT file parse error: {str(e)}"
+
+        # Pred objects
+        pred_objs = load_pred_masks(result, conf_threshold)
+
+        # Visualization
+        if gt_objs:
+            img_gt, img_pred, img_overlay = visualize_gt_pred_overlay_from_objects(
+                img, gt_objs, pred_objs, result.names
+            )
+        else:
+            # Sadece prediction
+            img_gt = None
+            img_pred = visualize_pred_only(img, pred_objs, result.names)
+            img_overlay = None
+
+        # Confidence chart
+        confidence_chart = plot_confidence_chart_yolo(
+            result,
+            conf_threshold=chart_conf_threshold,
+            predict_threshold=conf_threshold,
+        )
+
+        # Response
+        response_data = {
+            "inference_time": inference_time,
+            "confidence_chart": confidence_chart,
+            "predictions": [
+                {
+                    "class": result.names[int(result.boxes.cls[i])],
+                    "confidence": float(result.boxes.conf[i]),
+                }
+                for i in range(len(result.boxes))
+                if float(result.boxes.conf[i]) >= conf_threshold
+            ],
+        }
+
+        # GT hatası varsa ekle
+        if gt_error:
+            response_data["gt_warning"] = gt_error
+
+        # Images
+        if img_gt is not None:
+            _, gt_buffer = cv2.imencode(".png", img_gt)
+            response_data["gt_image"] = base64.b64encode(gt_buffer).decode("utf-8")
+
+        _, pred_buffer = cv2.imencode(".png", img_pred)
+        response_data["pred_image"] = base64.b64encode(pred_buffer).decode("utf-8")
+
+        if img_overlay is not None:
+            _, overlay_buffer = cv2.imencode(".png", img_overlay)
+            response_data["overlay_image"] = base64.b64encode(overlay_buffer).decode(
+                "utf-8"
+            )
+
+        return JSONResponse(response_data)
+
+    # ========================================================================
+    # RT-DETR MODELS
+    # ========================================================================
+    elif model_name.startswith("rt-detr"):
+        config_path = MODELS_DIR / f"{model_name}_config.yml"
+        checkpoint_path = MODELS_DIR / f"{model_name}.pth"
+
+        if not checkpoint_path.exists():
+            return {"error": f"checkpoint not found: {checkpoint_path}"}
+
+        if not config_path.exists():
+            return {"error": f"config not found: {config_path}"}
+
+        # Model yükle
+        try:
+            model, cfg = load_rtdetr_model_and_config(
+                config_path, checkpoint_path, device="cpu"
+            )
+        except Exception as e:
+            return {"error": f"Model loading failed: {str(e)}"}
+
+        # Inference
+        try:
+            start_time = time.time()
+            outputs, orig_img, orig_size = rtdetr_inference_image_from_array(
+                model, img, cfg, device="cpu"
+            )
+            inference_time = time.time() - start_time
+        except Exception as e:
+            return {"error": f"Inference failed: {str(e)}"}
+
+        # Postprocess
+        detections = postprocess_rtdetr_outputs(
+            outputs, orig_size, conf_threshold=chart_conf_threshold
+        )
+
+        # GT varsa parse et
+        gt_bboxes = []
+        if gt_file is not None:
+            try:
+                gt_content = await gt_file.read()
+                gt_json = json.loads(gt_content.decode("utf-8"))
+                gt_bboxes = parse_rtdetr_gt_from_json(gt_json, CLASS_NAMES)
+            except Exception as e:
+                gt_error = f"GT file parse error: {str(e)}"
+
+        # Visualization
+        if gt_bboxes:
+            img_gt, img_pred, img_overlay = visualize_bboxes_rtdetr(
+                orig_img, gt_bboxes, detections, CLASS_NAMES, conf_threshold
+            )
+        else:
+            # Sadece prediction
+            img_gt = None
+            img_pred = visualize_rtdetr_pred_only(
+                orig_img, detections, CLASS_NAMES, conf_threshold
+            )
+            img_overlay = None
+
+        # Confidence chart
+        confidence_chart = plot_confidence_chart_rtdetr(
+            detections,
+            CLASS_NAMES,
+            conf_threshold=chart_conf_threshold,
+            predict_threshold=conf_threshold,
+        )
+
+        # Response
+        response_data = {
+            "inference_time": inference_time,
+            "confidence_chart": confidence_chart,
+            "predictions": [
+                {
+                    "class": (
+                        CLASS_NAMES[label]
+                        if label < len(CLASS_NAMES)
+                        else f"Class {label}"
+                    ),
+                    "confidence": float(score),
+                }
+                for score, label in zip(detections["scores"], detections["labels"])
+                if float(score) >= conf_threshold
+            ],
+        }
+
+        # GT hatası varsa ekle
+        if gt_error:
+            response_data["gt_warning"] = gt_error
+
+        # Images
+        if img_gt is not None:
+            _, gt_buffer = cv2.imencode(".png", img_gt)
+            response_data["gt_image"] = base64.b64encode(gt_buffer).decode("utf-8")
+
+        _, pred_buffer = cv2.imencode(".png", img_pred)
+        response_data["pred_image"] = base64.b64encode(pred_buffer).decode("utf-8")
+
+        if img_overlay is not None:
+            _, overlay_buffer = cv2.imencode(".png", img_overlay)
+            response_data["overlay_image"] = base64.b64encode(overlay_buffer).decode(
+                "utf-8"
+            )
+
+        return JSONResponse(response_data)
+
+    else:
+        return {"error": "unsupported model type"}
+
+
+@app.get("/get/models")
+def get_models():
+    models = []
+    for model_file in MODELS_DIR.iterdir():
+        if model_file.is_file() and not model_file.stem.endswith("config"):
+            models.append(model_file.stem)
+
+    return models
+
+
+@app.get("/get/test-images")
+def get_test_images():
+    return [i.name for i in (TEST_DIR / "images").iterdir() if i.is_file()]
