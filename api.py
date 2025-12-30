@@ -723,7 +723,7 @@ def visualize_bboxes_rtdetr(
 
 
 def plot_confidence_chart_rtdetr(
-    detections, class_names, conf_threshold=0.001, predict_threshold=0.5
+    detections, class_names, conf_threshold=0.001, predict_threshold=0.5, top_k=10
 ):
     """RT-DETR için confidence chart"""
     scores = detections["scores"]
@@ -739,6 +739,11 @@ def plot_confidence_chart_rtdetr(
 
     if len(scores) == 0:
         return None
+
+    if top_k is not None and len(scores) > top_k:
+        topk_idx = np.argsort(scores)[-top_k:][::-1]
+        scores = scores[topk_idx]
+        labels = labels[topk_idx]
 
     # Class names
     class_name_list = [
@@ -757,7 +762,9 @@ def plot_confidence_chart_rtdetr(
     ax.set_xlabel("Sınıf Adı", fontsize=12, fontweight="bold")
     ax.set_ylabel("Confidence Değeri", fontsize=12, fontweight="bold")
     ax.set_title(
-        "RT-DETRv4 Tahmin Confidence Değerleri", fontsize=14, fontweight="bold"
+        "RT-DETRv4 Confidence Scores (best 10 in 300 queries)",
+        fontsize=14,
+        fontweight="bold",
     )
     ax.set_xticks(range(len(scores)))
     ax.set_xticklabels(class_name_list, rotation=45, ha="right")
@@ -923,7 +930,6 @@ def predict_test(
         confidence_chart = plot_confidence_chart_rtdetr(
             detections,
             class_names,
-            conf_threshold=chart_conf_threshold,
             predict_threshold=conf_threshold,
         )
 
@@ -1101,7 +1107,7 @@ async def predict_upload(
 
         # Postprocess
         detections = postprocess_rtdetr_outputs(
-            outputs, orig_size, conf_threshold=chart_conf_threshold
+            outputs, orig_size, conf_threshold=conf_threshold
         )
 
         # GT varsa parse et
@@ -1131,7 +1137,6 @@ async def predict_upload(
         confidence_chart = plot_confidence_chart_rtdetr(
             detections,
             CLASS_NAMES,
-            conf_threshold=chart_conf_threshold,
             predict_threshold=conf_threshold,
         )
 
