@@ -25,14 +25,6 @@ MODELS_DIR = BASE_DIR / "models"
 RTDETR_REPO = BASE_DIR / "RT-DETRv4"
 RESULTS_DIR = BASE_DIR / "results"
 
-MODELS = [
-    "yolov8x-seg",
-    "yolov8x-seg-pretrained",
-    "yolov12l-seg",
-    "yolov12l-seg-pretrained",
-    "rt-detrv4x",
-    "rt-detrv4x-pretrained",
-]
 
 # Hardcoded 5 class names (sizin dataset'inizin sınıfları)
 CLASS_NAMES = [
@@ -810,9 +802,6 @@ def predict_test(
 ):
     """Test prediction endpoint - YOLO ve RT-DETR destekli"""
 
-    if model_name not in MODELS:
-        return {"error": "model not found in models"}
-
     image_path = TEST_DIR / "images" / image_name
 
     if not image_path.exists():
@@ -988,9 +977,6 @@ async def predict_upload(
     YOLO: gt_file = .txt (YOLO polygon format)
     RT-DETR: gt_file = .json (simplified COCO format)
     """
-
-    if model_name not in MODELS:
-        return {"error": "model not found in models"}
 
     # Image'i memory'de oku
     image_bytes = await image.read()
