@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from typing import Optional
+from os import chdir
 
 import time
 from pathlib import Path
@@ -821,6 +822,10 @@ def predict_test(
     # YOLO MODELS
     # ========================================================================
     if model_name.startswith("yolo"):
+
+        if model_name.startswith("yolov12"):
+            chdir("yolov12")
+
         from ultralytics import YOLO
 
         model = YOLO(MODELS_DIR / f"{model_name}.pt")
@@ -851,6 +856,7 @@ def predict_test(
             predict_threshold=conf_threshold,
         )
 
+        chdir(BASE_DIR)
         return JSONResponse(
             {
                 "gt_image": base64.b64encode(gt_buffer).decode("utf-8"),
@@ -1000,6 +1006,10 @@ async def predict_upload(
     # YOLO MODELS
     # ========================================================================
     if model_name.startswith("yolo"):
+
+        if model_name.startswith("yolov12"):
+            chdir("yolov12")
+
         from ultralytics import YOLO
 
         model = YOLO(MODELS_DIR / f"{model_name}.pt")
@@ -1076,6 +1086,7 @@ async def predict_upload(
                 "utf-8"
             )
 
+        chdir(BASE_DIR)
         return JSONResponse(response_data)
 
     # ========================================================================
@@ -1190,7 +1201,11 @@ async def predict_upload(
 def get_models():
     models = []
     for model_file in MODELS_DIR.iterdir():
-        if model_file.is_file() and not model_file.stem.endswith("config"):
+        if (
+            model_file.is_file()
+            and (model_file.name.endswith(("pt", "pth")))
+            and not model_file.stem.endswith("config")
+        ):
             models.append(model_file.stem)
 
     return models
