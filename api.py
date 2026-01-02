@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from typing import Optional
 
 import time
@@ -20,7 +21,8 @@ DATA_DIR = BASE_DIR / "data"
 TEST_DIR = DATA_DIR / "test"
 UPLOAD_DIR = DATA_DIR / "uploads"
 MODELS_DIR = BASE_DIR / "models"
-RTDETR_REPO = BASE_DIR / "RT-DETRv4"  # RT-DETRv4 repo path
+RTDETR_REPO = BASE_DIR / "RT-DETRv4"
+RESULTS_DIR = BASE_DIR / "results"
 
 MODELS = [
     "yolov8x-seg",
@@ -41,6 +43,8 @@ CLASS_NAMES = [
 ]
 
 app = FastAPI(title="predictApi", version="1.0.0")
+
+app.mount("/results", StaticFiles(directory="results"), name="results")
 
 origins = ["http://localhost:5173"]
 
@@ -1195,3 +1199,42 @@ def get_models():
 @app.get("/get/test-images")
 def get_test_images():
     return [i.name for i in (TEST_DIR / "images").iterdir() if i.is_file()]
+
+
+@app.get("/get/models-info")
+def get_models_info(model_name: str):
+    model_dir = RESULTS_DIR / model_name
+
+    if not model_dir.exists():
+        raise HTTPException(status_code=404, detail="Model not found")
+
+    # ---- model info ----
+    model_info_file = model_dir / "model_info.json"
+    metrics_file = model_dir / "metrics_test_classwise.json"
+
+    model_info = {}
+    metrics = {}
+
+    if model_info_file.exists():
+        model_info = json.loads(model_info_file.read_text())
+
+    if metrics_file.exists():
+        metrics = json.loads(metrics_file.read_text())
+
+    graphics = []
+
+    if model_dir.exists():
+        graphics = [
+            {
+                "label": img.stem.replace("_", " ").title(),
+                "path": f"/results/{model_name}/{img.name}",
+            }
+            for img in sorted(model_dir.glob("*.png"))
+        ]
+
+    return {
+        "model": model_name,
+        "model_info": model_info,
+        "metrics": metrics,
+        "graphics": graphics,
+    }
