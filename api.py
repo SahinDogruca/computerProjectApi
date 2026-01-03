@@ -2,8 +2,10 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.exceptions import HTTPException
 from typing import Optional
 from os import chdir
+import shutil
 
 import time
 from pathlib import Path
@@ -1239,3 +1241,42 @@ def get_models_info(model_name: str):
         "metrics": metrics,
         "graphics": graphics,
     }
+
+
+@app.post("/load/model")
+async def load_model(file: UploadFile = File(...), model_name: str = Form(str)):
+    models = [model.name for model in MODELS_DIR.iterdir()]
+
+    if not file.filename.endswith((".pt", ".pth", ".yml")):
+        raise HTTPException(
+            status_code=400, detail="Only .pt, .pth, .yml files are allowed"
+        )
+
+    if not model_name.startswith(("yolo", "rt-detr")):
+        raise HTTPException(
+            status_code=400, detail="Only Yolo or Rt-detr models allowed"
+        )
+
+    if model_name.endswith((".pt", ".pth", ".yml")):
+        raise HTTPException(status_code=400, detail="enter model name without suffix")
+
+    suffix = file.filename.split(".")[1]
+    safe_filename = f"{model_name.replace(' ', '_')}.{suffix}"
+
+    if safe_filename in models:
+        raise HTTPException(status_code=400, detail="Same model already exists")
+
+    file_path = MODELS_DIR / safe_filename
+
+    try:
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        return {
+            "message": "Model uploaded successfully",
+            "filename": safe_filename.split(".")[0],
+        }
+
+    except Exception as e:
+        print("buraya yakalandı")
+        raise HTTPException(status_code=500, detail=str(e))
