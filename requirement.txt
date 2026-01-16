@@ -4,3 +4,4 @@ python-dotenv
 ultralytics
 faster-coco-eval
 python-multipart
+supervision
