@@ -14,7 +14,6 @@ from models import ModelManager
 from visualization import Visualizer
 from utils import read_yolo_labels, create_confidence_chart
 
-# Configuration
 BASE_DIR = Path(__file__).parent
 DATA_DIR = BASE_DIR / "data"
 TEST_DIR = DATA_DIR / "test"
@@ -108,7 +107,6 @@ def predict_test(
         chart_conf_threshold=config.chart_conf_threshold,
     )
 
-    # Filter predictions
     filtered_detections = all_detections[
         all_detections.confidence >= config.conf_threshold
     ]
@@ -121,9 +119,6 @@ def predict_test(
             "confidence_chart": confidence_chart,
             "inference_time": inference_time,
             "model_type": "segmentation" if is_segmentation else "detection",
-            "predictions": model_manager.format_predictions(
-                filtered_detections, results[0].names, is_segmentation
-            ),
             "total_detections": len(filtered_detections),
         }
     )
@@ -138,7 +133,6 @@ async def predict_upload(
     top_k: int = Form(10),
     gt_file: Optional[UploadFile] = File(None),
 ):
-    """Upload endpoint with optional GT file"""
 
     config = PredictionConfig(
         model_name=model_name,
@@ -147,24 +141,19 @@ async def predict_upload(
         top_k=top_k,
     )
 
-    # Read and decode image
     img = await model_manager.read_uploaded_image(image)
 
-    # Load model and predict
     model, is_segmentation = model_manager.load_model(config.model_name)
     results, inference_time = model_manager.predict(
         model, img, config.chart_conf_threshold
     )
 
-    # Get detections
     all_detections = model_manager.get_detections(results[0])
 
-    # Process GT if provided
     gt_data = None
     if gt_file:
         gt_data = await visualizer.process_gt_file(gt_file, img.shape)
 
-    # Visualize
     if gt_data and gt_data.get("detections"):
         images = visualizer.create_gt_pred_overlay_from_detections(
             img=img,
@@ -184,7 +173,6 @@ async def predict_upload(
             is_segmentation=is_segmentation,
         )
 
-    # Create confidence chart
     confidence_chart = create_confidence_chart(
         detections=all_detections,
         class_names=results[0].names,
@@ -193,21 +181,16 @@ async def predict_upload(
         top_k=config.top_k,
     )
 
-    # Filter predictions
     filtered_detections = all_detections[
         all_detections.confidence >= config.conf_threshold
     ]
 
-    # Build response
     response = {
         "inference_time": inference_time,
         "confidence_chart": confidence_chart,
         "model_type": "segmentation" if is_segmentation else "detection",
         "total_predictions": len(all_detections),
         "filtered_predictions_count": len(filtered_detections),
-        "predictions": model_manager.format_predictions(
-            filtered_detections, results[0].names, is_segmentation
-        ),
     }
 
     # Add GT warning if there was an error

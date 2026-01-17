@@ -78,10 +78,8 @@ class Visualizer:
         # Read ground truth
         gt_detections, gt_is_seg = read_yolo_labels(label_path, image.shape)
 
-        # Filter predictions by threshold
         filtered_predictions = predictions[predictions.confidence >= conf_threshold]
 
-        # Create annotators
         annotators = self._create_annotators(is_segmentation or gt_is_seg)
 
         # === GROUND TRUTH IMAGE ===

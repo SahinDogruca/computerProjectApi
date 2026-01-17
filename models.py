@@ -1,7 +1,3 @@
-"""
-Model management module - handles loading, prediction, and model operations
-"""
-
 from pathlib import Path
 from typing import Tuple, Any, List, Dict
 import time
@@ -19,19 +15,11 @@ class ModelManager:
         self.base_dir = models_dir.parent
 
     def load_model(self, model_name: str) -> Tuple[Any, bool]:
-        """
-        Load a model by name and return the model instance and segmentation flag
 
-        Args:
-            model_name: Name of the model to load
-
-        Returns:
-            Tuple of (model, is_segmentation)
-        """
         is_segmentation = False
 
         if model_name.startswith("yolo"):
-            # Handle YOLO v12 special case
+
             if model_name.startswith("yolov12"):
                 chdir("yolov12")
 
@@ -54,18 +42,7 @@ class ModelManager:
     def predict(
         self, model: Any, source: Any, conf_threshold: float = 0.001, imgsz: int = 1536
     ) -> Tuple[Any, float]:
-        """
-        Run prediction on source
 
-        Args:
-            model: Loaded model instance
-            source: Image path or numpy array
-            conf_threshold: Confidence threshold for chart
-            imgsz: Image size for inference
-
-        Returns:
-            Tuple of (results, inference_time)
-        """
         start_time = time.time()
         results = model.predict(
             source=source, imgsz=imgsz, device="cpu", conf=conf_threshold
@@ -79,32 +56,12 @@ class ModelManager:
 
     @staticmethod
     def get_detections(result: Any) -> sv.Detections:
-        """
-        Convert Ultralytics result to Supervision Detections
-
-        Args:
-            result: Ultralytics prediction result
-
-        Returns:
-            Supervision Detections object
-        """
         return sv.Detections.from_ultralytics(result)
 
     @staticmethod
     def format_predictions(
         detections: sv.Detections, class_names: Dict[int, str], is_segmentation: bool
     ) -> List[Dict]:
-        """
-        Format detections into a list of prediction dictionaries
-
-        Args:
-            detections: Supervision Detections object
-            class_names: Dictionary mapping class IDs to names
-            is_segmentation: Whether the model is segmentation
-
-        Returns:
-            List of prediction dictionaries
-        """
         predictions = []
 
         for i in range(len(detections)):
@@ -120,15 +77,6 @@ class ModelManager:
 
     @staticmethod
     async def read_uploaded_image(file) -> np.ndarray:
-        """
-        Read an uploaded image file
-
-        Args:
-            file: UploadFile object
-
-        Returns:
-            Image as numpy array
-        """
         image_bytes = await file.read()
         nparr = np.frombuffer(image_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
@@ -139,12 +87,6 @@ class ModelManager:
         return img
 
     def list_models(self) -> List[str]:
-        """
-        List all available models
-
-        Returns:
-            List of model names (without extension)
-        """
         models = []
         for model_file in self.models_dir.iterdir():
             if (
