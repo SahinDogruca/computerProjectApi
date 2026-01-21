@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-dotenv
+ultralytics==8.3.63
+faster-coco-eval==1.7.0
+python-multipart
+supervision==0.27.0
+torch==2.7.0
+numpy==1.26.4

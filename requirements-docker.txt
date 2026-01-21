@@ -1,0 +1,48 @@
+# =============================================================================
+# Dental Lesion Detection API - Docker Requirements
+# CPU-based inference environment
+# =============================================================================
+
+# -------------- Core Framework ----------------
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+python-dotenv==1.0.1
+
+# -------------- PyTorch (CPU Only) ----------------
+# PyTorch for Docker - CPU version will be installed automatically
+torch==2.2.2
+torchvision==0.17.2
+
+# -------------- Computer Vision ----------------
+opencv-python-headless==4.9.0.80
+numpy==1.26.4
+pillow>=10.0.0
+
+# -------------- YOLO / Object Detection ----------------
+ultralytics==8.3.63
+supervision==0.27.0
+
+# -------------- Visualization ----------------
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# -------------- YOLOv12 Specific ----------------
+timm==1.0.14
+albumentations==2.0.4
+
+# -------------- Evaluation / Metrics ----------------
+faster-coco-eval==1.7.0
+pycocotools==2.0.7
+
+# -------------- Utilities ----------------
+scipy==1.13.0
+psutil==5.9.8
+py-cpuinfo==9.0.0
+PyYAML>=6.0.1
+tqdm>=4.64.0
+pandas>=2.0.0
+requests>=2.31.0
+huggingface-hub>=0.23.2
+safetensors>=0.4.3
+ultralytics-thop>=2.0.0

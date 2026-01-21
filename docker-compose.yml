@@ -1,0 +1,33 @@
+
+services:
+  lesion-detection-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lesion-detection-api
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount models directory (for easier model updates without rebuild)
+      - ./models:/app/models:ro
+      # Mount results directory (for metrics and visualizations)
+      - ./results:/app/results
+      # Mount test data
+      - ./data:/app/data:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+# Optional: Add more services like a frontend or database
+# frontend:
+#   build: ../frontend
+#   ports:
+#     - "5173:5173"
+#   depends_on:
+#     - lesion-detection-api
